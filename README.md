@@ -57,6 +57,12 @@ cd macos-jarvis
 uv sync  # or: pip install -e .
 ```
 
+Download the wake-word models (one-time, ~10 MB):
+
+```bash
+uv run python -c "import openwakeword; openwakeword.utils.download_models()"
+```
+
 Then set your API key:
 
 ```bash
