@@ -1,6 +1,9 @@
 import asyncio
 import time
 
+from dotenv import load_dotenv
+from langfuse import get_client
+
 from jarvis.audio import record_until_silence
 from jarvis.brain import needs_vision, think_and_act
 from jarvis.config import Settings
@@ -136,6 +139,7 @@ def assemble_tools(shortcut_names: list[str]) -> list[dict]:
 
 
 async def main() -> None:
+    load_dotenv()  # populates os.environ so Langfuse picks up LANGFUSE_* vars
     settings = Settings()  # type: ignore[call-arg]  # groq_api_key comes from env/.env
     print("[Jarvis] Loading models and discovering shortcuts...")
 
@@ -171,6 +175,7 @@ async def main() -> None:
         print("\n[Jarvis] Shutting down...")
     finally:
         await stop_listener(listener)
+        get_client().flush()
 
 
 def cli() -> None:

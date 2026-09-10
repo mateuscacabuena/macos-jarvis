@@ -1,9 +1,9 @@
 import asyncio
-import functools
 import json
 from typing import cast
 
-from openai import OpenAI
+from langfuse import observe
+from langfuse.openai import OpenAI
 from openai.types.chat import ChatCompletionMessageFunctionToolCall
 
 from jarvis import hands, harness
@@ -35,6 +35,7 @@ def needs_vision(text: str, settings: Settings) -> bool:
     return any(kw in lower for kw in settings.vision_keywords)
 
 
+@observe()
 async def _execute_tool(name: str, args: dict) -> str:
     if name == "run_apple_shortcut":
         return await hands.run_shortcut(args["shortcut_name"], input_text=args.get("input_text"))
@@ -57,6 +58,7 @@ async def _execute_tool(name: str, args: dict) -> str:
     return f"Unknown tool: {name}"
 
 
+@observe()
 async def think_and_act(
     text: str,
     image: str | None,
@@ -92,8 +94,10 @@ async def think_and_act(
         if tools:
             kwargs["tools"] = tools
 
-        loop = asyncio.get_running_loop()
-        response = await loop.run_in_executor(None, functools.partial(client.chat.completions.create, **kwargs))
+        # asyncio.to_thread copies the current contextvars context into the worker
+        # thread; run_in_executor does not, which would silently detach Langfuse's
+        # active-span tracking and start a new disconnected trace per LLM call.
+        response = await asyncio.to_thread(client.chat.completions.create, **kwargs)  # type: ignore[arg-type]
 
         msg = response.choices[0].message
 
