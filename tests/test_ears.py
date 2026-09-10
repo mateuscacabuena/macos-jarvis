@@ -8,7 +8,7 @@ from jarvis.ears import transcribe
 
 
 def _make_settings(**kwargs) -> Settings:
-    defaults = {"anthropic_api_key": "k"}
+    defaults = {"groq_api_key": "k"}
     defaults.update(kwargs)
     return Settings(**defaults)
 

@@ -4,7 +4,7 @@
 
 Jarvis runs on your Mac with access to Apple Shortcuts, the filesystem
 (read via Spotlight, writes confined to `~/.jarvis`), your microphone and
-camera, and your Anthropic API key. Security reports are taken seriously.
+camera, and your Groq API key. Security reports are taken seriously.
 
 **Please do not open a public issue for security vulnerabilities.**
 

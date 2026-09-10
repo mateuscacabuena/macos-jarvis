@@ -11,10 +11,10 @@ Thanks for your interest in contributing to Jarvis! This project is in its early
 uv sync --group dev
 ```
 
-3. Create a `.env` file with your Anthropic API key:
+3. Create a `.env` file with your Groq API key:
 
 ```
-ANTHROPIC_API_KEY=sk-ant-...
+GROQ_API_KEY=gsk_...
 ```
 
 4. Run the tests:
@@ -40,7 +40,7 @@ src/jarvis/
 ├── audio.py     # Microphone recording
 ├── ears.py      # Speech-to-text (MLX Whisper)
 ├── eyes.py      # Camera capture (OpenCV)
-├── brain.py     # Claude API + tool execution
+├── brain.py     # Groq API + tool execution
 ├── hands.py     # Apple Shortcuts, file ops, Spotlight
 ├── mouth.py     # Text-to-speech (MLX Kokoro)
 └── config.py    # Settings (pydantic-settings)

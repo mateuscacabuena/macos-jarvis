@@ -9,7 +9,7 @@ from jarvis.eyes import capture
 
 
 def _make_settings(**kwargs) -> Settings:
-    defaults = {"anthropic_api_key": "k", "camera_index": 0}
+    defaults = {"groq_api_key": "k", "camera_index": 0}
     defaults.update(kwargs)
     return Settings(**defaults)
 

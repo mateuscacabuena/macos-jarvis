@@ -3,12 +3,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from jarvis.brain import _convert_tools_for_anthropic, needs_vision, think_and_act
+from jarvis.brain import needs_vision, think_and_act
 from jarvis.config import Settings
 
 
 def _make_settings(**kwargs) -> Settings:
-    defaults = {"anthropic_api_key": "test-key"}
+    defaults = {"groq_api_key": "test-key"}
     defaults.update(kwargs)
     return Settings(**defaults)
 
@@ -20,6 +20,32 @@ def reset_client():
     jarvis.brain._client = None
     yield
     jarvis.brain._client = None
+
+
+def _text_response(text: str):
+    message = MagicMock()
+    message.content = text
+    message.tool_calls = None
+    choice = MagicMock()
+    choice.message = message
+    response = MagicMock()
+    response.choices = [choice]
+    return response
+
+
+def _tool_call_response(tool_id: str, name: str, arguments: dict):
+    tool_call = MagicMock()
+    tool_call.id = tool_id
+    tool_call.function.name = name
+    tool_call.function.arguments = __import__("json").dumps(arguments)
+    message = MagicMock()
+    message.content = None
+    message.tool_calls = [tool_call]
+    choice = MagicMock()
+    choice.message = message
+    response = MagicMock()
+    response.choices = [choice]
+    return response
 
 
 class TestNeedsVision:
@@ -44,25 +70,6 @@ class TestNeedsVision:
         assert needs_vision("LOOK at the Screen", s) is True
 
 
-class TestConvertTools:
-    def test_converts_openai_format_to_anthropic(self):
-        tools = [
-            {
-                "type": "function",
-                "function": {
-                    "name": "search_files",
-                    "description": "Search files",
-                    "parameters": {"type": "object", "properties": {"query": {"type": "string"}}},
-                },
-            }
-        ]
-        result = _convert_tools_for_anthropic(tools)
-        assert len(result) == 1
-        assert result[0]["name"] == "search_files"
-        assert result[0]["description"] == "Search files"
-        assert "input_schema" in result[0]
-
-
 class TestThinkAndAct:
     @pytest.mark.asyncio
     async def test_simple_text_response(self):
@@ -71,17 +78,9 @@ class TestThinkAndAct:
         conversation: list[dict] = []
         tools = [{"type": "function", "function": {"name": "run_apple_shortcut", "description": "x", "parameters": {}}}]
 
-        mock_text_block = MagicMock()
-        mock_text_block.type = "text"
-        mock_text_block.text = "Hello! How can I help?"
-
-        mock_response = MagicMock()
-        mock_response.stop_reason = "end_turn"
-        mock_response.content = [mock_text_block]
-
         with patch("jarvis.brain._get_client") as mock_get_client:
             mock_client = MagicMock()
-            mock_client.messages.create = MagicMock(return_value=mock_response)
+            mock_client.chat.completions.create = MagicMock(return_value=_text_response("Hello! How can I help?"))
             mock_get_client.return_value = mock_client
 
             result = await think_and_act("hello", None, interrupt, tools, conversation, settings)
@@ -95,27 +94,12 @@ class TestThinkAndAct:
         conversation: list[dict] = []
         tools = [{"type": "function", "function": {"name": "run_apple_shortcut", "description": "x", "parameters": {}}}]
 
-        mock_tool_block = MagicMock()
-        mock_tool_block.type = "tool_use"
-        mock_tool_block.id = "toolu_123"
-        mock_tool_block.name = "run_apple_shortcut"
-        mock_tool_block.input = {"shortcut_name": "What's on today?"}
-
-        mock_resp1 = MagicMock()
-        mock_resp1.stop_reason = "tool_use"
-        mock_resp1.content = [mock_tool_block]
-
-        mock_text_block = MagicMock()
-        mock_text_block.type = "text"
-        mock_text_block.text = "You have 3 meetings today."
-
-        mock_resp2 = MagicMock()
-        mock_resp2.stop_reason = "end_turn"
-        mock_resp2.content = [mock_text_block]
+        resp1 = _tool_call_response("call_123", "run_apple_shortcut", {"shortcut_name": "What's on today?"})
+        resp2 = _text_response("You have 3 meetings today.")
 
         with patch("jarvis.brain._get_client") as mock_get_client:
             mock_client = MagicMock()
-            mock_client.messages.create = MagicMock(side_effect=[mock_resp1, mock_resp2])
+            mock_client.chat.completions.create = MagicMock(side_effect=[resp1, resp2])
             mock_get_client.return_value = mock_client
 
             with patch("jarvis.hands.run_shortcut", new_callable=AsyncMock) as mock_run:
@@ -147,7 +131,7 @@ class TestThinkAndAct:
             result = await think_and_act("hello", None, interrupt, tools, conversation, settings)
 
         assert result == ""
-        mock_client.messages.create.assert_not_called()
+        mock_client.chat.completions.create.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_image_included_in_message(self):
@@ -156,17 +140,9 @@ class TestThinkAndAct:
         conversation: list[dict] = []
         tools = []
 
-        mock_text_block = MagicMock()
-        mock_text_block.type = "text"
-        mock_text_block.text = "I see a laptop on the desk."
-
-        mock_response = MagicMock()
-        mock_response.stop_reason = "end_turn"
-        mock_response.content = [mock_text_block]
-
         with patch("jarvis.brain._get_client") as mock_get_client:
             mock_client = MagicMock()
-            mock_client.messages.create = MagicMock(return_value=mock_response)
+            mock_client.chat.completions.create = MagicMock(return_value=_text_response("I see a laptop on the desk."))
             mock_get_client.return_value = mock_client
 
             result = await think_and_act(
@@ -179,12 +155,12 @@ class TestThinkAndAct:
             )
 
         assert result == "I see a laptop on the desk."
-        call_args = mock_client.messages.create.call_args
+        call_args = mock_client.chat.completions.create.call_args
         messages = call_args[1]["messages"]
         user_msg = messages[-1]
         assert isinstance(user_msg["content"], list)
-        assert user_msg["content"][1]["type"] == "image"
-        assert user_msg["content"][1]["source"]["data"] == "base64imgdata"
+        assert user_msg["content"][1]["type"] == "image_url"
+        assert user_msg["content"][1]["image_url"]["url"] == "data:image/jpeg;base64,base64imgdata"
 
 
 class TestHarnessDispatch:
@@ -230,35 +206,20 @@ class TestHarnessDispatch:
         interrupt = asyncio.Event()
         conversation: list[dict] = []
 
-        mock_tool_block = MagicMock()
-        mock_tool_block.type = "tool_use"
-        mock_tool_block.id = "toolu_err"
-        mock_tool_block.name = "save_memory"
-        mock_tool_block.input = {"name": "x"}  # missing "content" → KeyError
-
-        mock_resp1 = MagicMock()
-        mock_resp1.stop_reason = "tool_use"
-        mock_resp1.content = [mock_tool_block]
-
-        mock_text_block = MagicMock()
-        mock_text_block.type = "text"
-        mock_text_block.text = "Sorry, that failed."
-
-        mock_resp2 = MagicMock()
-        mock_resp2.stop_reason = "end_turn"
-        mock_resp2.content = [mock_text_block]
+        resp1 = _tool_call_response("call_err", "save_memory", {"name": "x"})  # missing "content" → KeyError
+        resp2 = _text_response("Sorry, that failed.")
 
         with patch("jarvis.brain._get_client") as mock_get_client:
             mock_client = MagicMock()
-            mock_client.messages.create = MagicMock(side_effect=[mock_resp1, mock_resp2])
+            mock_client.chat.completions.create = MagicMock(side_effect=[resp1, resp2])
             mock_get_client.return_value = mock_client
 
             result = await think_and_act("remember x", None, interrupt, [], conversation, settings)
 
         assert result == "Sorry, that failed."
         tool_result_msg = conversation[-2]
-        assert tool_result_msg["role"] == "user"
-        assert tool_result_msg["content"][0]["content"].startswith("Error:")
+        assert tool_result_msg["role"] == "tool"
+        assert tool_result_msg["content"].startswith("Error:")
 
 
 class TestSystemExtra:
@@ -267,17 +228,9 @@ class TestSystemExtra:
         settings = _make_settings()
         interrupt = asyncio.Event()
 
-        mock_text_block = MagicMock()
-        mock_text_block.type = "text"
-        mock_text_block.text = "Hi."
-
-        mock_response = MagicMock()
-        mock_response.stop_reason = "end_turn"
-        mock_response.content = [mock_text_block]
-
         with patch("jarvis.brain._get_client") as mock_get_client:
             mock_client = MagicMock()
-            mock_client.messages.create = MagicMock(return_value=mock_response)
+            mock_client.chat.completions.create = MagicMock(return_value=_text_response("Hi."))
             mock_get_client.return_value = mock_client
 
             await think_and_act(
@@ -290,9 +243,11 @@ class TestSystemExtra:
                 system_extra="## Your memories\n- music: Prefers Spotify",
             )
 
-        system = mock_client.messages.create.call_args[1]["system"]
-        assert system.endswith("## Your memories\n- music: Prefers Spotify")
-        assert system.startswith("You are Jarvis")
+        messages = mock_client.chat.completions.create.call_args[1]["messages"]
+        system_msg = messages[0]
+        assert system_msg["role"] == "system"
+        assert system_msg["content"].endswith("## Your memories\n- music: Prefers Spotify")
+        assert system_msg["content"].startswith("You are Jarvis")
 
     @pytest.mark.asyncio
     async def test_no_system_extra_keeps_prompt_unchanged(self):
@@ -301,19 +256,12 @@ class TestSystemExtra:
         settings = _make_settings()
         interrupt = asyncio.Event()
 
-        mock_text_block = MagicMock()
-        mock_text_block.type = "text"
-        mock_text_block.text = "Hi."
-
-        mock_response = MagicMock()
-        mock_response.stop_reason = "end_turn"
-        mock_response.content = [mock_text_block]
-
         with patch("jarvis.brain._get_client") as mock_get_client:
             mock_client = MagicMock()
-            mock_client.messages.create = MagicMock(return_value=mock_response)
+            mock_client.chat.completions.create = MagicMock(return_value=_text_response("Hi."))
             mock_get_client.return_value = mock_client
 
             await think_and_act("hello", None, interrupt, [], [], settings)
 
-        assert mock_client.messages.create.call_args[1]["system"] == SYSTEM_PROMPT
+        messages = mock_client.chat.completions.create.call_args[1]["messages"]
+        assert messages[0]["content"] == SYSTEM_PROMPT

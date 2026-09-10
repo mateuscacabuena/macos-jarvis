@@ -1,8 +1,10 @@
 import asyncio
 import functools
 import json
+from typing import cast
 
-import anthropic
+from openai import OpenAI
+from openai.types.chat import ChatCompletionMessageFunctionToolCall
 
 from jarvis import hands, harness
 from jarvis.config import Settings
@@ -18,33 +20,19 @@ SYSTEM_PROMPT = (
 
 MAX_CONVERSATION_MESSAGES = 20
 
-_client: anthropic.Anthropic | None = None
+_client: OpenAI | None = None
 
 
-def _get_client(settings: Settings) -> anthropic.Anthropic:
+def _get_client(settings: Settings) -> OpenAI:
     global _client
     if _client is None:
-        _client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
+        _client = OpenAI(api_key=settings.groq_api_key, base_url=settings.groq_base_url)
     return _client
 
 
 def needs_vision(text: str, settings: Settings) -> bool:
     lower = text.lower()
     return any(kw in lower for kw in settings.vision_keywords)
-
-
-def _convert_tools_for_anthropic(tools: list[dict]) -> list[dict]:
-    converted = []
-    for tool in tools:
-        fn = tool["function"]
-        converted.append(
-            {
-                "name": fn["name"],
-                "description": fn["description"],
-                "input_schema": fn["parameters"],
-            }
-        )
-    return converted
 
 
 async def _execute_tool(name: str, args: dict) -> str:
@@ -81,71 +69,67 @@ async def think_and_act(
 
     client = _get_client(settings)
 
+    if not conversation:
+        system_content = SYSTEM_PROMPT + ("\n\n" + system_extra if system_extra else "")
+        conversation.append({"role": "system", "content": system_content})
+
     user_content: str | list[dict]
     if image:
         user_content = [
             {"type": "text", "text": text},
-            {
-                "type": "image",
-                "source": {
-                    "type": "base64",
-                    "media_type": "image/jpeg",
-                    "data": image,
-                },
-            },
+            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image}"}},
         ]
     else:
         user_content = text
 
     conversation.append({"role": "user", "content": user_content})
-    trimmed = conversation[-MAX_CONVERSATION_MESSAGES:]
-
-    anthropic_tools = _convert_tools_for_anthropic(tools) if tools else []
+    trimmed = [conversation[0]] + conversation[1:][-MAX_CONVERSATION_MESSAGES:]
 
     while not interrupt.is_set():
-        kwargs = {
-            "model": settings.anthropic_model,
-            "max_tokens": 1024,
-            "system": SYSTEM_PROMPT + ("\n\n" + system_extra if system_extra else ""),
-            "messages": trimmed,
-        }
-        if anthropic_tools:
-            kwargs["tools"] = anthropic_tools
+        kwargs = {"model": settings.groq_model, "messages": trimmed}
+        if tools:
+            kwargs["tools"] = tools
 
         loop = asyncio.get_running_loop()
-        response = await loop.run_in_executor(None, functools.partial(client.messages.create, **kwargs))
+        response = await loop.run_in_executor(None, functools.partial(client.chat.completions.create, **kwargs))
 
-        if response.stop_reason != "tool_use":
-            text_parts = [b.text for b in response.content if b.type == "text"]
-            reply = " ".join(text_parts) if text_parts else ""
-            conversation.append({"role": "assistant", "content": response.content})
-            return reply
+        msg = response.choices[0].message
 
-        conversation.append({"role": "assistant", "content": response.content})
-        trimmed.append({"role": "assistant", "content": response.content})
+        if not msg.tool_calls:
+            conversation.append({"role": "assistant", "content": msg.content})
+            return msg.content or ""
 
-        tool_results = []
-        for block in response.content:
-            if block.type != "tool_use":
-                continue
+        function_calls = [cast(ChatCompletionMessageFunctionToolCall, tc) for tc in msg.tool_calls]
+
+        assistant_msg = {
+            "role": "assistant",
+            "content": msg.content,
+            "tool_calls": [
+                {
+                    "id": tc.id,
+                    "type": "function",
+                    "function": {"name": tc.function.name, "arguments": tc.function.arguments},
+                }
+                for tc in function_calls
+            ],
+        }
+        trimmed.append(assistant_msg)
+        conversation.append(assistant_msg)
+
+        for tc in function_calls:
             if interrupt.is_set():
                 return ""
 
-            print(f"  [Brain] Tool call: {block.name}({json.dumps(block.input, ensure_ascii=False)[:120]})")
+            args = json.loads(tc.function.arguments)
+            print(f"  [Brain] Tool call: {tc.function.name}({json.dumps(args, ensure_ascii=False)[:120]})")
             try:
-                result = await _execute_tool(block.name, block.input)
+                result = await _execute_tool(tc.function.name, args)
             except Exception as e:
                 result = f"Error: {e}"
             print(f"  [Brain] Tool result: {str(result)[:120]}")
-            tool_results.append(
-                {
-                    "type": "tool_result",
-                    "tool_use_id": block.id,
-                    "content": result,
-                }
-            )
 
-        conversation.append({"role": "user", "content": tool_results})
-        trimmed.append({"role": "user", "content": tool_results})
+            tool_msg = {"role": "tool", "tool_call_id": tc.id, "content": result}
+            trimmed.append(tool_msg)
+            conversation.append(tool_msg)
 
     return ""

@@ -3,10 +3,11 @@
 These exercise the REAL component seams: the actual harness writing to an
 actual (tmp) filesystem, the actual brain tool-dispatch loop, and the actual
 context rebuild across "sessions". Only the unavoidable external boundary is
-faked: the Anthropic HTTP API (no network in CI) — and nothing else.
+faked: the Groq HTTP API (no network in CI) — and nothing else.
 """
 
 import asyncio
+import json
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -35,35 +36,42 @@ def reset_brain_client():
 
 
 def _make_settings() -> Settings:
-    return Settings(anthropic_api_key="test-key")
+    return Settings(groq_api_key="test-key")
 
 
-def _tool_use(name: str, args: dict, tool_id: str = "toolu_1") -> MagicMock:
-    block = MagicMock()
-    block.type = "tool_use"
-    block.id = tool_id
-    block.name = name
-    block.input = args
-    return block
+def _tool_call(name: str, args: dict, tool_id: str = "call_1") -> MagicMock:
+    tool_call = MagicMock()
+    tool_call.id = tool_id
+    tool_call.function.name = name
+    tool_call.function.arguments = json.dumps(args)
+    return tool_call
 
 
-def _text(content: str) -> MagicMock:
-    block = MagicMock()
-    block.type = "text"
-    block.text = content
-    return block
-
-
-def _response(stop_reason: str, content: list) -> MagicMock:
+def _tool_response(tool_calls: list) -> MagicMock:
+    message = MagicMock()
+    message.content = None
+    message.tool_calls = tool_calls
+    choice = MagicMock()
+    choice.message = message
     response = MagicMock()
-    response.stop_reason = stop_reason
-    response.content = content
+    response.choices = [choice]
+    return response
+
+
+def _text_response(content: str) -> MagicMock:
+    message = MagicMock()
+    message.content = content
+    message.tool_calls = None
+    choice = MagicMock()
+    choice.message = message
+    response = MagicMock()
+    response.choices = [choice]
     return response
 
 
 def _fake_client(responses: list) -> MagicMock:
     client = MagicMock()
-    client.messages.create = MagicMock(side_effect=responses)
+    client.chat.completions.create = MagicMock(side_effect=responses)
     return client
 
 
@@ -74,8 +82,8 @@ class TestVoiceCommandToDisk:
         the real tool result is what gets sent back to the model."""
         conversation: list[dict] = []
         responses = [
-            _response("tool_use", [_tool_use("manage_todos", {"action": "add", "item": "buy milk"})]),
-            _response("end_turn", [_text("Added buy milk to your list.")]),
+            _tool_response([_tool_call("manage_todos", {"action": "add", "item": "buy milk"})]),
+            _text_response("Added buy milk to your list."),
         ]
 
         with patch("jarvis.brain._get_client", return_value=_fake_client(responses)):
@@ -90,18 +98,18 @@ class TestVoiceCommandToDisk:
 
         assert reply == "Added buy milk to your list."
         assert "- [ ] buy milk" in (jarvis_home / "TODO.md").read_text(encoding="utf-8")
-        # the tool_result that went back to the model came from the real harness
-        tool_result_msg = conversation[2]
-        assert tool_result_msg["role"] == "user"
-        assert tool_result_msg["content"][0]["content"] == "Added todo: buy milk"
+        # the tool result that went back to the model came from the real harness
+        tool_result_msg = conversation[3]
+        assert tool_result_msg["role"] == "tool"
+        assert tool_result_msg["content"] == "Added todo: buy milk"
 
     @pytest.mark.asyncio
     async def test_memory_survives_a_session_restart(self, jarvis_home):
         """Turn 1 saves a memory; a fresh 'session' rebuilds context from disk
         and reads the memory back through the real dispatcher."""
         responses = [
-            _response("tool_use", [_tool_use("save_memory", {"name": "coffee", "content": "Oat milk flat whites."})]),
-            _response("end_turn", [_text("I'll remember that.")]),
+            _tool_response([_tool_call("save_memory", {"name": "coffee", "content": "Oat milk flat whites."})]),
+            _text_response("I'll remember that."),
         ]
         with patch("jarvis.brain._get_client", return_value=_fake_client(responses)):
             reply = await think_and_act(
@@ -122,8 +130,8 @@ class TestVoiceCommandToDisk:
 
         conversation2: list[dict] = []
         responses2 = [
-            _response("tool_use", [_tool_use("read_harness_item", {"kind": "memory", "name": "coffee"})]),
-            _response("end_turn", [_text("You like oat milk flat whites.")]),
+            _tool_response([_tool_call("read_harness_item", {"kind": "memory", "name": "coffee"})]),
+            _text_response("You like oat milk flat whites."),
         ]
         with patch("jarvis.brain._get_client", return_value=_fake_client(responses2)):
             reply2 = await think_and_act(
@@ -136,7 +144,7 @@ class TestVoiceCommandToDisk:
                 system_extra=context,
             )
         assert reply2 == "You like oat milk flat whites."
-        assert conversation2[2]["content"][0]["content"] == "Oat milk flat whites."
+        assert conversation2[3]["content"] == "Oat milk flat whites."
 
 
 class TestTodoLifecycle:
@@ -180,8 +188,8 @@ class TestSandboxIntegrity:
         dangling-tool_use session-brick bug)."""
         conversation: list[dict] = []
         responses = [
-            _response("tool_use", [_tool_use("save_memory", {"name": "x"})]),  # missing content
-            _response("end_turn", [_text("Sorry.")]),
+            _tool_response([_tool_call("save_memory", {"name": "x"})]),  # missing content
+            _text_response("Sorry."),
         ]
         with patch("jarvis.brain._get_client", return_value=_fake_client(responses)):
             reply = await think_and_act(
@@ -193,4 +201,4 @@ class TestSandboxIntegrity:
                 _make_settings(),
             )
         assert reply == "Sorry."
-        assert conversation[2]["content"][0]["content"].startswith("Error:")
+        assert conversation[3]["content"].startswith("Error:")

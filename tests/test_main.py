@@ -9,7 +9,7 @@ from jarvis.main import pipeline_iteration
 
 
 def _make_settings(**kwargs) -> Settings:
-    defaults = {"anthropic_api_key": "test-key"}
+    defaults = {"groq_api_key": "test-key"}
     defaults.update(kwargs)
     return Settings(**defaults)
 

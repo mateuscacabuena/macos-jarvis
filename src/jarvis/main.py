@@ -85,7 +85,7 @@ async def pipeline_iteration(
 
     # 4. Think
     t3 = time.monotonic()
-    _log("Brain", f"Sending to Claude ({settings.anthropic_model})...")
+    _log("Brain", f"Sending to Groq ({settings.groq_model})...")
     try:
         response = await think_and_act(
             text,
@@ -134,7 +134,7 @@ def assemble_tools(shortcut_names: list[str]) -> list[dict]:
 
 
 async def main() -> None:
-    settings = Settings()  # type: ignore[call-arg]  # anthropic_api_key comes from env/.env
+    settings = Settings()  # type: ignore[call-arg]  # groq_api_key comes from env/.env
     print("[Jarvis] Loading models and discovering shortcuts...")
 
     shortcut_names = await discover_shortcuts()
@@ -142,7 +142,7 @@ async def main() -> None:
     set_available_shortcuts(shortcut_names)
     tools = assemble_tools(shortcut_names)
     print(f"[Jarvis] Found {len(shortcut_names)} shortcuts: {', '.join(shortcut_names)}")
-    print(f"[Jarvis] Brain: {settings.anthropic_model}")
+    print(f"[Jarvis] Brain: {settings.groq_model}")
     print(f"[Jarvis] Harness ready at {home}")
 
     conversation: list[dict] = []
