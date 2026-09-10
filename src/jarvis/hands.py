@@ -1,6 +1,8 @@
 import asyncio
 import subprocess
 
+import psutil
+
 
 async def discover_shortcuts() -> list[str]:
     proc = await asyncio.create_subprocess_exec(
@@ -132,6 +134,28 @@ def build_maintenance_tool_schema() -> dict:
             },
         },
     }
+
+
+def build_system_stats_tool_schema() -> dict:
+    return {
+        "type": "function",
+        "function": {
+            "name": "get_system_stats",
+            "description": "Get current CPU usage percentage and RAM usage (used/total/percent) of this Mac.",
+            "parameters": {"type": "object", "properties": {}, "required": []},
+        },
+    }
+
+
+async def get_system_stats() -> str:
+    # psutil.cpu_percent(interval=...) sleeps synchronously to sample; offload
+    # to a thread so it doesn't block the asyncio event loop.
+    cpu_percent = await asyncio.to_thread(psutil.cpu_percent, 0.5)
+    mem = psutil.virtual_memory()
+    return (
+        f"CPU usage: {cpu_percent:.0f}%. "
+        f"RAM usage: {mem.percent:.0f}% ({mem.used / 1e9:.1f} GB used of {mem.total / 1e9:.1f} GB)."
+    )
 
 
 async def open_item(path_or_app: str, with_app: str | None = None) -> str:

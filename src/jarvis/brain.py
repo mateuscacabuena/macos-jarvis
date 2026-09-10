@@ -44,6 +44,8 @@ async def _execute_tool(name: str, args: dict) -> str:
         return await hands.search_files(args["query"])
     elif name == "system_maintenance":
         return await hands.system_maintenance(args["action"], dry_run=args.get("dry_run", True))
+    elif name == "get_system_stats":
+        return await hands.get_system_stats()
     elif name == "save_memory":
         return harness.save_memory(args["name"], args["content"])
     elif name == "save_skill":

@@ -201,6 +201,15 @@ class TestHarnessDispatch:
         mock_mt.assert_called_once_with("add", "x")
 
     @pytest.mark.asyncio
+    async def test_get_system_stats_dispatch(self):
+        from jarvis.brain import _execute_tool
+
+        with patch("jarvis.hands.get_system_stats", new_callable=AsyncMock, return_value="CPU usage: 10%.") as mock_gs:
+            result = await _execute_tool("get_system_stats", {})
+        assert result == "CPU usage: 10%."
+        mock_gs.assert_called_once_with()
+
+    @pytest.mark.asyncio
     async def test_tool_exception_becomes_error_result(self):
         settings = _make_settings()
         interrupt = asyncio.Event()

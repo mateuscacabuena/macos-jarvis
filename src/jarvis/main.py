@@ -10,6 +10,7 @@ from jarvis.hands import (
     build_maintenance_tool_schema,
     build_open_tool_schema,
     build_search_tool_schema,
+    build_system_stats_tool_schema,
     build_tool_schema,
     discover_shortcuts,
 )
@@ -127,6 +128,7 @@ def assemble_tools(shortcut_names: list[str]) -> list[dict]:
             build_open_tool_schema(),
             build_search_tool_schema(),
             build_maintenance_tool_schema(),
+            build_system_stats_tool_schema(),
         ]
     )
     tools.extend(build_harness_tool_schemas())
