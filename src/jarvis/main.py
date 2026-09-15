@@ -116,10 +116,14 @@ async def pipeline_iteration(
         _log("TTS", "Generating speech...")
         if listener:
             listener.pause()
-        await speak(response, interrupt, settings)
-        if listener:
-            listener.resume()
-        _log("TTS", "Done speaking", t4)
+        try:
+            await speak(response, interrupt, settings)
+            _log("TTS", "Done speaking", t4)
+        except Exception as e:
+            _log("TTS", f"ERROR: {e}", t4)
+        finally:
+            if listener:
+                listener.resume()
 
     _log("Total", "Pipeline complete", t0)
 

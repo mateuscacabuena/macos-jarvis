@@ -35,6 +35,10 @@ def needs_vision(text: str, settings: Settings) -> bool:
     return any(kw in lower for kw in settings.vision_keywords)
 
 
+def _window_has_image(messages: list[dict]) -> bool:
+    return any(isinstance(m.get("content"), list) for m in messages)
+
+
 @observe()
 async def _execute_tool(name: str, args: dict) -> str:
     if name == "run_apple_shortcut":
@@ -89,8 +93,18 @@ async def think_and_act(
     conversation.append({"role": "user", "content": user_content})
     trimmed = [conversation[0]] + conversation[1:][-MAX_CONVERSATION_MESSAGES:]
 
+    # gpt-oss-120b rejects multimodal content arrays ("content must be a string"),
+    # so any window containing an image must use a vision-capable model instead.
+    using_vision_model = _window_has_image(trimmed)
+    model = settings.groq_vision_model if using_vision_model else settings.groq_model
+
     while not interrupt.is_set():
-        kwargs = {"model": settings.groq_model, "messages": trimmed}
+        # qwen3.6's thinking mode defaults to ~2000 output tokens, which blows past
+        # Groq's free-tier OTPM limit (1000); cap it since replies are spoken and short anyway.
+        kwargs = {"model": model, "messages": trimmed, "max_tokens": 400}
+        if using_vision_model:
+            # Non-thinking mode: direct answers instead of a spoken-aloud chain-of-thought dump.
+            kwargs["reasoning_effort"] = "none"
         if tools:
             kwargs["tools"] = tools
 

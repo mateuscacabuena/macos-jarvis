@@ -117,6 +117,55 @@ class TestThinkAndAct:
         mock_run.assert_called_once_with("What's on today?", input_text=None)
 
     @pytest.mark.asyncio
+    async def test_two_sequential_tool_calls_across_rounds(self):
+        """Multi-tool chaining: model calls one tool, sees the result, then
+        calls a second tool before finally answering — the loop must re-enter
+        for each round rather than stopping after the first tool result."""
+        settings = _make_settings()
+        interrupt = asyncio.Event()
+        conversation: list[dict] = []
+        tools = [
+            {"type": "function", "function": {"name": "get_system_stats", "description": "x", "parameters": {}}},
+            {"type": "function", "function": {"name": "system_maintenance", "description": "x", "parameters": {}}},
+        ]
+
+        resp1 = _tool_call_response("call_stats", "get_system_stats", {})
+        resp2 = _tool_call_response("call_clean", "system_maintenance", {"action": "clean"})
+        resp3 = _text_response("Your CPU is at 25% and I've cleaned up the system.")
+
+        with patch("jarvis.brain._get_client") as mock_get_client:
+            mock_client = MagicMock()
+            mock_client.chat.completions.create = MagicMock(side_effect=[resp1, resp2, resp3])
+            mock_get_client.return_value = mock_client
+
+            with (
+                patch("jarvis.hands.get_system_stats", new_callable=AsyncMock) as mock_stats,
+                patch("jarvis.hands.system_maintenance", new_callable=AsyncMock) as mock_clean,
+            ):
+                mock_stats.return_value = "CPU usage: 25%."
+                mock_clean.return_value = "Cleaned 1.2 GB of caches."
+
+                result = await think_and_act(
+                    "check my resources and clean up maintenance",
+                    None,
+                    interrupt,
+                    tools,
+                    conversation,
+                    settings,
+                )
+
+        assert result == "Your CPU is at 25% and I've cleaned up the system."
+        assert mock_client.chat.completions.create.call_count == 3
+        mock_stats.assert_called_once_with()
+        mock_clean.assert_called_once_with("clean", dry_run=True)
+
+        tool_messages = [m for m in conversation if m.get("role") == "tool"]
+        assert [m["content"] for m in tool_messages] == [
+            "CPU usage: 25%.",
+            "Cleaned 1.2 GB of caches.",
+        ]
+
+    @pytest.mark.asyncio
     async def test_interrupt_stops_tool_loop(self):
         settings = _make_settings()
         interrupt = asyncio.Event()
@@ -161,6 +210,74 @@ class TestThinkAndAct:
         assert isinstance(user_msg["content"], list)
         assert user_msg["content"][1]["type"] == "image_url"
         assert user_msg["content"][1]["image_url"]["url"] == "data:image/jpeg;base64,base64imgdata"
+
+    @pytest.mark.asyncio
+    async def test_image_uses_vision_model_not_text_model(self):
+        """gpt-oss-120b (the default text model) rejects multimodal content
+        arrays with a 400 — any turn carrying an image must route to the
+        vision-capable model instead."""
+        settings = _make_settings(groq_model="text-model", groq_vision_model="vision-model")
+        interrupt = asyncio.Event()
+        conversation: list[dict] = []
+
+        with patch("jarvis.brain._get_client") as mock_get_client:
+            mock_client = MagicMock()
+            mock_client.chat.completions.create = MagicMock(return_value=_text_response("I see a laptop."))
+            mock_get_client.return_value = mock_client
+
+            await think_and_act("look at my desk", "base64imgdata", interrupt, [], conversation, settings)
+
+        assert mock_client.chat.completions.create.call_args[1]["model"] == "vision-model"
+
+    @pytest.mark.asyncio
+    async def test_no_image_uses_text_model(self):
+        settings = _make_settings(groq_model="text-model", groq_vision_model="vision-model")
+        interrupt = asyncio.Event()
+        conversation: list[dict] = []
+
+        with patch("jarvis.brain._get_client") as mock_get_client:
+            mock_client = MagicMock()
+            mock_client.chat.completions.create = MagicMock(return_value=_text_response("Hi."))
+            mock_get_client.return_value = mock_client
+
+            await think_and_act("hello", None, interrupt, [], conversation, settings)
+
+        assert mock_client.chat.completions.create.call_args[1]["model"] == "text-model"
+
+    @pytest.mark.asyncio
+    async def test_image_request_disables_thinking_mode(self):
+        """qwen3.6's thinking mode dumps raw chain-of-thought into content (which
+        gets spoken aloud) and blows past Groq's free-tier output-token limit —
+        vision calls must run in non-thinking mode."""
+        settings = _make_settings(groq_vision_model="vision-model")
+        interrupt = asyncio.Event()
+        conversation: list[dict] = []
+
+        with patch("jarvis.brain._get_client") as mock_get_client:
+            mock_client = MagicMock()
+            mock_client.chat.completions.create = MagicMock(return_value=_text_response("I see a laptop."))
+            mock_get_client.return_value = mock_client
+
+            await think_and_act("look at my desk", "base64imgdata", interrupt, [], conversation, settings)
+
+        kwargs = mock_client.chat.completions.create.call_args[1]
+        assert kwargs["reasoning_effort"] == "none"
+        assert kwargs["max_tokens"] == 400
+
+    @pytest.mark.asyncio
+    async def test_text_only_request_has_no_reasoning_effort(self):
+        settings = _make_settings()
+        interrupt = asyncio.Event()
+        conversation: list[dict] = []
+
+        with patch("jarvis.brain._get_client") as mock_get_client:
+            mock_client = MagicMock()
+            mock_client.chat.completions.create = MagicMock(return_value=_text_response("Hi."))
+            mock_get_client.return_value = mock_client
+
+            await think_and_act("hello", None, interrupt, [], conversation, settings)
+
+        assert "reasoning_effort" not in mock_client.chat.completions.create.call_args[1]
 
 
 class TestHarnessDispatch:

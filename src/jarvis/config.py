@@ -5,6 +5,7 @@ class Settings(BaseSettings):
     groq_api_key: str
     groq_base_url: str = "https://api.groq.com/openai/v1"
     groq_model: str = "openai/gpt-oss-120b"
+    groq_vision_model: str = "qwen/qwen3.6-27b"
     whisper_model: str = "mlx-community/whisper-small-mlx"
     kokoro_model: str = "mlx-community/Kokoro-82M-bf16"
     wake_model: str = "hey_jarvis"
