@@ -1,10 +1,13 @@
 import asyncio
 import json
-from typing import cast
+from typing import Annotated, TypedDict
 
+from langchain_core.messages import AIMessage, convert_to_openai_messages
+from langchain_core.runnables import RunnableConfig
 from langfuse import observe
 from langfuse.openai import OpenAI
-from openai.types.chat import ChatCompletionMessageFunctionToolCall
+from langgraph.graph import END, StateGraph
+from langgraph.graph.message import add_messages
 
 from jarvis import hands, harness
 from jarvis.config import Settings
@@ -39,6 +42,10 @@ def _window_has_image(messages: list[dict]) -> bool:
     return any(isinstance(m.get("content"), list) for m in messages)
 
 
+class _Interrupted(Exception):
+    pass
+
+
 @observe()
 async def _execute_tool(name: str, args: dict) -> str:
     if name == "run_apple_shortcut":
@@ -60,6 +67,81 @@ async def _execute_tool(name: str, args: dict) -> str:
     elif name == "manage_todos":
         return await harness.manage_todos(args["action"], args.get("item"))
     return f"Unknown tool: {name}"
+
+
+class AgentState(TypedDict):
+    messages: Annotated[list, add_messages]
+
+
+@observe(name="agent_node")
+async def _agent_node(state: AgentState, config: RunnableConfig) -> dict:
+    cfg = config["configurable"]
+    interrupt: asyncio.Event = cfg["interrupt"]
+    if interrupt.is_set():
+        raise _Interrupted()
+
+    openai_messages = convert_to_openai_messages(state["messages"])
+    kwargs = {"model": cfg["model"], "messages": openai_messages, "max_tokens": 400, **cfg["kwargs_extra"]}
+    if cfg["tools"]:
+        kwargs["tools"] = cfg["tools"]
+
+    # asyncio.to_thread copies the current contextvars context into the worker
+    # thread; run_in_executor does not, which would silently detach Langfuse's
+    # active-span tracking and start a new disconnected trace per LLM call.
+    response = await asyncio.to_thread(cfg["client"].chat.completions.create, **kwargs)
+    msg = response.choices[0].message
+
+    ai_message: dict = {"role": "assistant", "content": msg.content}
+    if msg.tool_calls:
+        ai_message["tool_calls"] = [
+            {
+                "id": tc.id,
+                "type": "function",
+                "function": {"name": tc.function.name, "arguments": tc.function.arguments},
+            }
+            for tc in msg.tool_calls
+        ]
+    return {"messages": [ai_message]}
+
+
+@observe(name="tools_node")
+async def _tools_node(state: AgentState, config: RunnableConfig) -> dict:
+    interrupt: asyncio.Event = config["configurable"]["interrupt"]
+    if interrupt.is_set():
+        raise _Interrupted()
+
+    last = state["messages"][-1]
+    tool_messages = []
+    for tc in last.tool_calls:
+        name, args = tc["name"], tc["args"]
+        print(f"  [Brain] Tool call: {name}({json.dumps(args, ensure_ascii=False)[:120]})")
+        try:
+            result = await _execute_tool(name, args)
+        except Exception as e:
+            result = f"Error: {e}"
+        print(f"  [Brain] Tool result: {str(result)[:120]}")
+        tool_messages.append({"role": "tool", "tool_call_id": tc["id"], "content": str(result)})
+    return {"messages": tool_messages}
+
+
+def _should_continue(state: AgentState) -> str:
+    last = state["messages"][-1]
+    if isinstance(last, AIMessage) and last.tool_calls:
+        return "tools"
+    return END
+
+
+def _build_graph():
+    workflow = StateGraph(AgentState)
+    workflow.add_node("agent", _agent_node)
+    workflow.add_node("tools", _tools_node)
+    workflow.set_entry_point("agent")
+    workflow.add_conditional_edges("agent", _should_continue, {"tools": "tools", END: END})
+    workflow.add_edge("tools", "agent")
+    return workflow.compile()
+
+
+app = _build_graph()
 
 
 @observe()
@@ -97,59 +179,29 @@ async def think_and_act(
     # so any window containing an image must use a vision-capable model instead.
     using_vision_model = _window_has_image(trimmed)
     model = settings.groq_vision_model if using_vision_model else settings.groq_model
+    # qwen3.6's thinking mode defaults to ~2000 output tokens, which blows past
+    # Groq's free-tier OTPM limit (1000); non-thinking mode gives direct answers
+    # instead of a spoken-aloud chain-of-thought dump.
+    kwargs_extra = {"reasoning_effort": "none"} if using_vision_model else {}
 
-    while not interrupt.is_set():
-        # qwen3.6's thinking mode defaults to ~2000 output tokens, which blows past
-        # Groq's free-tier OTPM limit (1000); cap it since replies are spoken and short anyway.
-        kwargs = {"model": model, "messages": trimmed, "max_tokens": 400}
-        if using_vision_model:
-            # Non-thinking mode: direct answers instead of a spoken-aloud chain-of-thought dump.
-            kwargs["reasoning_effort"] = "none"
-        if tools:
-            kwargs["tools"] = tools
-
-        # asyncio.to_thread copies the current contextvars context into the worker
-        # thread; run_in_executor does not, which would silently detach Langfuse's
-        # active-span tracking and start a new disconnected trace per LLM call.
-        response = await asyncio.to_thread(client.chat.completions.create, **kwargs)  # type: ignore[arg-type]
-
-        msg = response.choices[0].message
-
-        if not msg.tool_calls:
-            conversation.append({"role": "assistant", "content": msg.content})
-            return msg.content or ""
-
-        function_calls = [cast(ChatCompletionMessageFunctionToolCall, tc) for tc in msg.tool_calls]
-
-        assistant_msg = {
-            "role": "assistant",
-            "content": msg.content,
-            "tool_calls": [
-                {
-                    "id": tc.id,
-                    "type": "function",
-                    "function": {"name": tc.function.name, "arguments": tc.function.arguments},
-                }
-                for tc in function_calls
-            ],
+    config: RunnableConfig = {
+        "configurable": {
+            "client": client,
+            "model": model,
+            "tools": tools,
+            "kwargs_extra": kwargs_extra,
+            "interrupt": interrupt,
         }
-        trimmed.append(assistant_msg)
-        conversation.append(assistant_msg)
+    }
 
-        for tc in function_calls:
-            if interrupt.is_set():
-                return ""
+    try:
+        final_state = await app.ainvoke({"messages": trimmed}, config=config)
+    except _Interrupted:
+        return ""
 
-            args = json.loads(tc.function.arguments)
-            print(f"  [Brain] Tool call: {tc.function.name}({json.dumps(args, ensure_ascii=False)[:120]})")
-            try:
-                result = await _execute_tool(tc.function.name, args)
-            except Exception as e:
-                result = f"Error: {e}"
-            print(f"  [Brain] Tool result: {str(result)[:120]}")
+    new_messages = final_state["messages"][len(trimmed) :]
+    for message in new_messages:
+        conversation.append(convert_to_openai_messages([message])[0])
 
-            tool_msg = {"role": "tool", "tool_call_id": tc.id, "content": result}
-            trimmed.append(tool_msg)
-            conversation.append(tool_msg)
-
-    return ""
+    final_message = new_messages[-1] if new_messages else None
+    return (final_message.content or "") if final_message else ""
