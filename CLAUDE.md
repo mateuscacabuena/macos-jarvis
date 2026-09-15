@@ -35,8 +35,17 @@ inference is offloaded to thread executors.
 ## Project provenance
 
 This repository is a personal fork, created for study purposes, of the upstream
-project: https://github.com/mateuscacabuena/macos-jarvis
+project https://github.com/luccaparadeda/macos-jarvis. The fork lives at
+https://github.com/mateuscacabuena/macos-jarvis (git remote `fork`).
 
 All contributions made here are for learning/experimentation and to extend/improve
 that fork. They are not official upstream contributions unless explicitly submitted
 back via a PR to the original project.
+
+## Git workflow
+
+- Always merge and push finished work to the `main` branch of the fork
+  (`git push fork main`), not to the upstream `origin` remote.
+- Do not leave stale feature/dependabot branches lingering on the fork after
+  their work has been merged into `main` — delete them from the remote once
+  merged.
