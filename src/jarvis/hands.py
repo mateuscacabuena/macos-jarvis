@@ -3,6 +3,9 @@ import subprocess
 
 import psutil
 
+from jarvis.config import Settings
+from jarvis.queue.producer import enqueue_command
+
 
 async def discover_shortcuts() -> list[str]:
     proc = await asyncio.create_subprocess_exec(
@@ -145,6 +148,36 @@ def build_system_stats_tool_schema() -> dict:
             "parameters": {"type": "object", "properties": {}, "required": []},
         },
     }
+
+
+def build_background_task_tool_schema() -> dict:
+    return {
+        "type": "function",
+        "function": {
+            "name": "run_background_task",
+            "description": (
+                "Queue a slow task (system scans, maintenance, large searches) to run in the "
+                "background on a separate worker instead of blocking this conversation. Use this "
+                "whenever the user asks for something that would take a while — confirm it started "
+                "and move on, the result won't be available until later."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "prompt": {
+                        "type": "string",
+                        "description": "Instruction for the background agent describing the task to run.",
+                    },
+                },
+                "required": ["prompt"],
+            },
+        },
+    }
+
+
+async def run_background_task(prompt: str, settings: Settings) -> str:
+    job_id = await enqueue_command(prompt, settings)
+    return f"Queued background job {job_id}."
 
 
 async def get_system_stats() -> str:

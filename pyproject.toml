@@ -34,6 +34,10 @@ dependencies = [
     "langfuse>=2.53.0",
     "langgraph>=1.2.11",
     "langchain-core>=1.6.3",
+    "saq>=0.26.4",
+    "redis>=8.1.0",
+    "fastapi>=0.141.1",
+    "uvicorn>=0.53.0",
 ]
 
 [project.urls]

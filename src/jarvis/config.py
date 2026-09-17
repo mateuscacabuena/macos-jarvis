@@ -8,6 +8,7 @@ class Settings(BaseSettings):
     groq_vision_model: str = "qwen/qwen3.6-27b"
     whisper_model: str = "mlx-community/whisper-small-mlx"
     kokoro_model: str = "mlx-community/Kokoro-82M-bf16"
+    redis_url: str = "redis://:myredissecret@localhost:6379"
     wake_model: str = "hey_jarvis"
     wake_threshold: float = 0.6
     camera_index: int = 0

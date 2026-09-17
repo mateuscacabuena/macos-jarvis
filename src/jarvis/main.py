@@ -10,6 +10,7 @@ from jarvis.config import Settings
 from jarvis.ears import transcribe
 from jarvis.eyes import capture
 from jarvis.hands import (
+    build_background_task_tool_schema,
     build_maintenance_tool_schema,
     build_open_tool_schema,
     build_search_tool_schema,
@@ -136,6 +137,7 @@ def assemble_tools(shortcut_names: list[str]) -> list[dict]:
             build_search_tool_schema(),
             build_maintenance_tool_schema(),
             build_system_stats_tool_schema(),
+            build_background_task_tool_schema(),
         ]
     )
     tools.extend(build_harness_tool_schemas())

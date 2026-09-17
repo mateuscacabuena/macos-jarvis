@@ -47,8 +47,10 @@ class _Interrupted(Exception):
 
 
 @observe()
-async def _execute_tool(name: str, args: dict) -> str:
-    if name == "run_apple_shortcut":
+async def _execute_tool(name: str, args: dict, settings: Settings) -> str:
+    if name == "run_background_task":
+        return await hands.run_background_task(args["prompt"], settings)
+    elif name == "run_apple_shortcut":
         return await hands.run_shortcut(args["shortcut_name"], input_text=args.get("input_text"))
     elif name == "open_item":
         return await hands.open_item(args["path_or_app"], with_app=args.get("with_app"))
@@ -106,7 +108,8 @@ async def _agent_node(state: AgentState, config: RunnableConfig) -> dict:
 
 @observe(name="tools_node")
 async def _tools_node(state: AgentState, config: RunnableConfig) -> dict:
-    interrupt: asyncio.Event = config["configurable"]["interrupt"]
+    cfg = config["configurable"]
+    interrupt: asyncio.Event = cfg["interrupt"]
     if interrupt.is_set():
         raise _Interrupted()
 
@@ -116,7 +119,7 @@ async def _tools_node(state: AgentState, config: RunnableConfig) -> dict:
         name, args = tc["name"], tc["args"]
         print(f"  [Brain] Tool call: {name}({json.dumps(args, ensure_ascii=False)[:120]})")
         try:
-            result = await _execute_tool(name, args)
+            result = await _execute_tool(name, args, cfg["settings"])
         except Exception as e:
             result = f"Error: {e}"
         print(f"  [Brain] Tool result: {str(result)[:120]}")
@@ -191,6 +194,7 @@ async def think_and_act(
             "tools": tools,
             "kwargs_extra": kwargs_extra,
             "interrupt": interrupt,
+            "settings": settings,
         }
     }
 
